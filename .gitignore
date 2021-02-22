@@ -1,0 +1,7 @@
+# jlox
+# ignore gradle cache and build dir
+**/build
+**/.gradle
+
+# IntelliJ editor files
+**/.idea
