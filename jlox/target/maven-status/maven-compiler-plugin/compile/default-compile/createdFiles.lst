@@ -1,0 +1,14 @@
+dev/profsucrose/lox/Expr$Binary.class
+dev/profsucrose/lox/Parser$1.class
+dev/profsucrose/lox/Expr$Literal.class
+dev/profsucrose/lox/Expr.class
+dev/profsucrose/lox/AstPrinter.class
+dev/profsucrose/lox/Scanner.class
+dev/profsucrose/lox/Expr$Unary.class
+dev/profsucrose/lox/Expr$Grouping.class
+dev/profsucrose/lox/Token.class
+dev/profsucrose/lox/Parser.class
+dev/profsucrose/lox/Expr$Visitor.class
+dev/profsucrose/lox/TokenType.class
+dev/profsucrose/lox/Parser$ParseError.class
+dev/profsucrose/lox/Lox.class
