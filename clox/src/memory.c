@@ -11,5 +11,6 @@ void* reallocate(void* pointer, size_t old_size, size_t new_size) {
 
     // otherwise reallocate to smaller or larger memory block
     void* result = realloc(pointer, new_size);
+    if (result == NULL) exit(1);
     return result;
 }
