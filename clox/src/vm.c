@@ -6,12 +6,26 @@
 
 VM vm;
 
-void initVM() {
+static void reset_stack() {
+    // stack size is constant and only value at pointer
+    // can be accessed so no need to clear values
+    vm.stack_top = vm.stack;
+}
+
+void init_VM() {
+    reset_stack();
+}
+
+void free_VM() {
 
 }
 
-void freeVM() {
+void push(Value value) {
+    *vm.stack_top++ = value;
+}
 
+Value pop() {
+    return *vm.stack_top--;
 }
 
 static InterpretResult run() {
