@@ -1,7 +1,7 @@
 TARGET = clox
 
 CC = cc
-CFLAGS = -g -Wall -std=c99
+CFLAGS = -g -Wall -std=c99 -fshort-enums
 OBJ = obj
 SRC = src
 
