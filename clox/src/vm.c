@@ -18,7 +18,7 @@ void init_VM() {
 }
 
 void free_VM() {
-
+    // TODO
 }
 
 void push(Value value) {
@@ -88,8 +88,7 @@ static InterpretResult run() {
     #undef BINARY_OP
 }
 
-InterpretResult interpret(Chunk* chunk) {
+InterpretResult interpret(const char* source) {
     compile(source);
-    return run();
+    return INTERPRET_OK;
 }
-
