@@ -1,9 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "common.h"
 #include "compiler.h"
-#include "scanner.h"
 
 #ifdef DEBUG_PRINT_CODE
 #include "debug.h"
@@ -33,7 +31,7 @@ typedef enum {
 
 // typedef for function type signature 'ParseFn' that's void
 // pardon C99's awful function pointer syntax
-typedef void (*ParseFn)();
+typedef void (*ParseFn)(bool can_assign);
 
 typedef struct {
     ParseFn prefix;
@@ -99,6 +97,16 @@ static void consume(TokenType type, const char* message) {
     error_at_current(message);
 }
 
+static bool check(TokenType type) {
+    return parser.current.type == type;
+}
+
+static bool match(TokenType type) {
+    if (!check(type)) return false;
+    advance();
+    return true;
+}
+
 static void emit_byte(uint8_t byte) {
     write_chunk(current_chunk(), byte, parser.previous.line);
 }
@@ -141,7 +149,7 @@ static void expression();
 static ParseRule* get_rule(TokenType type);
 static void parse_precedence(Precedence precedence);
 
-static void binary() {
+static void binary(bool can_assign) {
     // remember operator just consumed
     TokenType operator_type = parser.previous.type;
 
@@ -166,17 +174,17 @@ static void binary() {
     }
 }
 
-static void grouping() {
+static void grouping(bool can_assign) {
     expression();
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
 
-static void number() {
+static void number(bool can_assign) {
     double value = strtod(parser.previous.start, NULL);
     emit_constant(NUMBER_VAL(value));
 }
 
-static void unary() {
+static void unary(bool can_assign) {
     TokenType operator_type = parser.previous.type;
 
     // compile operand
@@ -190,52 +198,91 @@ static void unary() {
     }
 }
 
+static void string(bool can_assign) {
+    emit_constant(
+        OBJ_VAL(
+            copy_string(
+                // pointer arithmetic to trim "s
+                parser.previous.start + 1,
+                parser.previous.length - 2
+            )
+        )
+    );
+}
+
+static uint8_t identifier_constant(Token* name) {
+    return make_constant(OBJ_VAL(copy_string(name->start, name->length)));
+}
+
+static void named_variable(Token name, bool can_assign) {
+    uint8_t arg = identifier_constant(&name);
+
+    // treat lvalue as setter if there's an equals sign
+    if (can_assign && match(TOKEN_EQUAL)) {
+        expression();
+        emit_bytes(OP_SET_GLOBAL, arg);
+    } else {
+        emit_bytes(OP_GET_GLOBAL, arg);
+    }
+}
+
+static void variable(bool can_assign) {
+    named_variable(parser.previous, can_assign);
+}
+
 // use only single p-code byte for boolean and nil data types
-static void literal_false() { emit_byte(OP_FALSE); }
-static void literal_true() { emit_byte(OP_TRUE); }
-static void literal_nil() { emit_byte(OP_NIL); }
+static void literal(bool can_assign) {
+    switch (parser.previous.type) {
+        case TOKEN_FALSE: emit_byte(OP_FALSE); break;
+        case TOKEN_NIL: emit_byte(OP_NIL); break;
+        case TOKEN_TRUE: emit_byte(OP_TRUE); break;
+        default:
+            return; // unreachable
+    }
+}
 
 ParseRule rules[] = {
-    [TOKEN_LEFT_PAREN]    = { grouping,      NULL,   PREC_NONE },
-    [TOKEN_RIGHT_PAREN]   = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_LEFT_BRACE]    = { NULL,          NULL,   PREC_NONE }, 
-    [TOKEN_RIGHT_BRACE]   = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_COMMA]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_DOT]           = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_MINUS]         = { unary,         binary, PREC_TERM },
-    [TOKEN_PLUS]          = { NULL,          binary, PREC_TERM },
-    [TOKEN_SEMICOLON]     = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_SLASH]         = { NULL,          binary, PREC_FACTOR },
-    [TOKEN_STAR]          = { NULL,          binary, PREC_FACTOR },
-    [TOKEN_BANG]          = { unary,         NULL,   PREC_NONE },
-    [TOKEN_BANG_EQUAL]    = { NULL,          binary, PREC_EQUALITY },
-    [TOKEN_EQUAL]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_EQUAL_EQUAL]   = { NULL,          binary, PREC_EQUALITY },
-    [TOKEN_GREATER]       = { NULL,          binary, PREC_COMPARISON },
-    [TOKEN_GREATER_EQUAL] = { NULL,          binary, PREC_COMPARISON },
-    [TOKEN_LESS]          = { NULL,          binary, PREC_COMPARISON },
-    [TOKEN_LESS_EQUAL]    = { NULL,          binary, PREC_COMPARISON },
-    [TOKEN_IDENTIFIER]    = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_STRING]        = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_NUMBER]        = { number,        NULL,   PREC_NONE },
-    [TOKEN_AND]           = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_CLASS]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_ELSE]          = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_FALSE]         = { literal_false, NULL,   PREC_NONE },
-    [TOKEN_FOR]           = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_FUN]           = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_IF]            = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_NIL]           = { literal_nil,   NULL,   PREC_NONE },
-    [TOKEN_OR]            = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_PRINT]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_RETURN]        = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_SUPER]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_THIS]          = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_TRUE]          = { literal_true,  NULL,   PREC_NONE },
-    [TOKEN_VAR]           = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_WHILE]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_ERROR]         = { NULL,          NULL,   PREC_NONE },
-    [TOKEN_EOF]           = { NULL,          NULL,   PREC_NONE },
+    [TOKEN_LEFT_PAREN]    = { grouping, NULL,   PREC_NONE },
+    [TOKEN_RIGHT_PAREN]   = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_LEFT_BRACE]    = { NULL,     NULL,   PREC_NONE }, 
+    [TOKEN_RIGHT_BRACE]   = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_COMMA]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_DOT]           = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_MINUS]         = { unary,    binary, PREC_TERM },
+    [TOKEN_PLUS]          = { NULL,     binary, PREC_TERM },
+    [TOKEN_SEMICOLON]     = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_SLASH]         = { NULL,     binary, PREC_FACTOR },
+    [TOKEN_STAR]          = { NULL,     binary, PREC_FACTOR },
+    [TOKEN_BANG]          = { unary,    NULL,   PREC_NONE },
+    [TOKEN_BANG_EQUAL]    = { NULL,     binary, PREC_EQUALITY },
+    [TOKEN_EQUAL]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_EQUAL_EQUAL]   = { NULL,     binary, PREC_EQUALITY },
+    [TOKEN_GREATER]       = { NULL,     binary, PREC_COMPARISON },
+    [TOKEN_GREATER_EQUAL] = { NULL,     binary, PREC_COMPARISON },
+    [TOKEN_LESS]          = { NULL,     binary, PREC_COMPARISON },
+    [TOKEN_LESS_EQUAL]    = { NULL,     binary, PREC_COMPARISON },
+    [TOKEN_IDENTIFIER]    = { variable, NULL,   PREC_NONE},
+    [TOKEN_IDENTIFIER]    = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_STRING]        = { string,   NULL,   PREC_NONE },
+    [TOKEN_NUMBER]        = { number,   NULL,   PREC_NONE },
+    [TOKEN_AND]           = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_CLASS]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_ELSE]          = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_FALSE]         = { literal,  NULL,   PREC_NONE },
+    [TOKEN_FOR]           = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_FUN]           = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_IF]            = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_NIL]           = { literal,  NULL,   PREC_NONE },
+    [TOKEN_OR]            = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_PRINT]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_RETURN]        = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_SUPER]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_THIS]          = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_TRUE]          = { literal,  NULL,   PREC_NONE },
+    [TOKEN_VAR]           = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_WHILE]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_ERROR]         = { NULL,     NULL,   PREC_NONE },
+    [TOKEN_EOF]           = { NULL,     NULL,   PREC_NONE },
 };
 
 static ParseRule* get_rule(TokenType type) {
@@ -252,17 +299,102 @@ static void parse_precedence(Precedence precedence) {
         return;
     }
 
-    prefix_rule();
+    bool can_assign = precedence <= PREC_ASSIGNMENT;
+    prefix_rule(can_assign);
 
     while (precedence <= get_rule(parser.current.type)->precedence) {
         advance();
         ParseFn infix_rule = get_rule(parser.previous.type)->infix;
-        infix_rule();
+        infix_rule(can_assign);
     }
+
+    if (can_assign && match(TOKEN_EQUAL)) {
+        error("Invalid assignment target.");
+    }
+}
+
+static uint8_t parse_variable(const char* error_message) {
+    consume(TOKEN_IDENTIFIER, error_message);
+    return identifier_constant(&parser.previous);
+}
+
+static void define_variable(uint8_t global) {
+    emit_bytes(OP_DEFINE_GLOBAL, global);
 }
 
 static void expression() {
     parse_precedence(PREC_ASSIGNMENT);
+}
+
+static void expression_statement() {
+    expression();
+    consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
+    emit_byte(OP_POP);
+}
+
+static void print_statement() {
+    expression();
+    consume(TOKEN_SEMICOLON, "Expect ';' after value.");
+    emit_byte(OP_PRINT);
+}
+
+static void statement() {
+    if (match(TOKEN_PRINT)) {
+        print_statement();
+    } else {
+        expression_statement();
+    }
+}
+
+static void synchronize() {
+    parser.panic_mode = false;
+
+    while (parser.current.type != TOKEN_EOF) {
+        // skip tokens until semicolon/token indicating
+        // statement boundary or EOF is reached
+        if (parser.previous.type == TOKEN_SEMICOLON) return;
+
+        switch (parser.current.type) {
+            case TOKEN_CLASS:
+            case TOKEN_FUN:
+            case TOKEN_VAR:
+            case TOKEN_FOR:
+            case TOKEN_IF:
+            case TOKEN_WHILE:
+            case TOKEN_PRINT:
+            case TOKEN_RETURN:
+                return;
+
+            default:
+                // do nothing
+                ;
+        }
+
+        advance();
+    }
+}
+
+static void var_declaration() {
+    uint8_t global = parse_variable("Expect variable name.");
+
+    if (match(TOKEN_EQUAL)) {
+        expression();
+    } else {
+        emit_byte(OP_NIL);
+    }
+    consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+
+    define_variable(global);
+}
+
+static void declaration() {
+    if (match(TOKEN_VAR)) {
+        var_declaration();
+    } else {
+        statement();
+    }
+
+    if (parser.panic_mode) synchronize();
 }
 
 bool compile(const char* source, Chunk* chunk) {
@@ -273,7 +405,11 @@ bool compile(const char* source, Chunk* chunk) {
     parser.panic_mode = false;
 
     advance();
-    expression();
+
+    while (!match(TOKEN_EOF)) {
+        declaration();
+    }
+
     consume(TOKEN_EOF, "Expect end of expression.");
     end_compiler();
     return !parser.had_error;

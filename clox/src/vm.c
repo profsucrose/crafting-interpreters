@@ -1,10 +1,13 @@
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 #include "common.h"
 #include "vm.h"
 #include "debug.h"
 #include "compiler.h"
+#include "object.h"
+#include "memory.h"
 
 VM vm;
 
@@ -16,10 +19,16 @@ static void reset_stack() {
 
 void init_VM() {
     reset_stack();
+    vm.objects = NULL;
+
+    init_table(&vm.globals);
+    init_table(&vm.strings);
 }
 
 void free_VM() {
-    // TODO
+    free_table(&vm.globals);
+    free_table(&vm.strings);
+    free_objects();
 }
 
 void push(Value value) {
@@ -36,6 +45,20 @@ static Value peek(int distance) {
 
 static bool is_falsey(Value value) {
     return IS_NIL(value) || (IS_BOOL(value) && !AS_BOOL(value));
+}
+
+static void concatenate() {
+    ObjString* b = AS_STRING(pop());
+    ObjString* a = AS_STRING(pop());
+
+    int length = a->length + b->length;
+    char* chars = ALLOCATE(char, length + 1);
+    memcpy(chars, a->chars, a->length);
+    memcpy(chars + a->length, b->chars, b->length);
+    chars[length] = '\0';
+
+    ObjString* result = take_string(chars, length);
+    push(OBJ_VAL(result));
 }
 
 void set(Value value) {
@@ -59,6 +82,8 @@ static void runtime_error(const char* format, ...) {
 static InterpretResult run() {
     #define READ_BYTE() (*vm.ip++)
     #define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])
+    #define READ_STRING() AS_STRING(READ_CONSTANT())
+
     // use do-while loop to avoid macro expansion
     // syntax issues (needs to be in a block and have semicolon at end
     // or not without breaking the program)
@@ -108,20 +133,65 @@ static InterpretResult run() {
                     return INTERPRET_RUNTIME_ERROR;
                 }
 
-                set(NUMBER_VAL(-AS_NUMBER(pop())));
+                push(NUMBER_VAL(-AS_NUMBER(pop())));
                 break;
             case OP_GREATER:    BINARY_OP(BOOL_VAL, >); break;
             case OP_LESS:       BINARY_OP(BOOL_VAL, <); break;
-            case OP_ADD:        BINARY_OP(NUMBER_VAL, +); break;
+            case OP_ADD: {
+                // support both arithmetic + and string concat
+                if (IS_STRING(peek(0)) && IS_STRING(peek(1))) {
+                    concatenate();
+                } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+                    double b = AS_NUMBER(pop());
+                    double a = AS_NUMBER(pop());
+                    push(NUMBER_VAL(a + b));
+                } else {
+                    runtime_error(
+                        "Operands must be two numbers or two strings."
+                    );
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                break;
+            }
             case OP_SUBTRACT:   BINARY_OP(NUMBER_VAL, -); break;
             case OP_MULTIPLY:   BINARY_OP(NUMBER_VAL, *); break;
             case OP_DIVIDE:     BINARY_OP(NUMBER_VAL, /); break;
             case OP_NOT:
                 push(BOOL_VAL(is_falsey(pop())));
                 break;
-            case OP_RETURN: {
+            case OP_POP: pop(); break;
+            case OP_GET_GLOBAL: {
+                ObjString* name = READ_STRING();
+                Value value;
+                if (!table_get(&vm.globals, name, &value)) {
+                    runtime_error("Undefined variable '%s'.", name->chars);
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                push(value);
+                break;
+            }
+            case OP_SET_GLOBAL: {
+                ObjString* name = READ_STRING();
+                if (table_set(&vm.globals, name, peek(0))) {
+                    table_delete(&vm.globals, name);
+                    runtime_error("Undefined variable '%s'.", name->chars);
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                break;
+            }
+            case OP_DEFINE_GLOBAL: {
+                ObjString* name = READ_STRING();
+                table_set(&vm.globals, name, peek(0));
+                pop();
+                break;
+            }
+            case OP_PRINT: {
                 print_value(pop());
                 printf("\n");
+                break;
+            }
+            case OP_RETURN: {
+                // exit interpreter
                 return INTERPRET_OK;
             }
         }
@@ -130,6 +200,7 @@ static InterpretResult run() {
     #undef READ_BYTE
     #undef READ_CONSTANT
     #undef BINARY_OP
+    #undef READ_STRING
 }
 
 InterpretResult interpret(const char* source) {

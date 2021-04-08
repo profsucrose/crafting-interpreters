@@ -7,6 +7,7 @@
 #include "debug.h"
 #include "value.h"
 #include "vm.h"
+#include "table.h"
 
 static void repl();
 static void run_file(const char* path);
